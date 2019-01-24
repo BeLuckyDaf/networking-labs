@@ -2,20 +2,26 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <signal.h>
+
+#define ERR_PATTERN "INVALID COMMAND, expected '%s' after '%s'\n"
+#define ARGEXP_PATTERN "INVALID COMMAND, expected argument of type '%s'\n"
+#define HELP_ANNOTATION "AVAILABLE COMMANDS: push(int), pop(), display(), peek(), " \
+			"empty(), create(), stack_size(), exit()\n"
+#define BUF_SIZE 512
+#define ARG_SIZE 256
+#define CMD_SIZE 256
 
 typedef struct node NODE;
-typedef NODE* STACK;
 
 struct node {
 	struct node *next;
 	int data;
 };
 
-STACK stack;
-int count;
-
-int fds[2];
-char buf[512];
+NODE* stack;
+int count, pid, fds[2];
+char buf[BUF_SIZE];
 
 int peek() {
 	if (stack == NULL) {
@@ -81,7 +87,7 @@ int readline(char *buf, size_t sz, int fd) {
 		i++;
 	if (count == -1) return 0;
 	if (buf[i] == '\n') buf[i] = '\0';
-	return i;
+	return 1;
 }
 
 int writeline(char *buf, size_t sz, int fd) {
@@ -93,67 +99,76 @@ int writeline(char *buf, size_t sz, int fd) {
 	}
 	write(fd, "\n", 1);
 	if (count == -1) return 0;
-	return i;
+	return 1;
 }
 
 
 
 int handle_input() {
-	char cmd[100];
-	char arg[100];
+	char cmd[CMD_SIZE];
+	char arg[ARG_SIZE];
 	int i, k, j;
 	i = k = j = 0;
 
-	while (k < 100 && i < 512 && buf[i] != '(' && buf[i] != '\0')
+	while (k < CMD_SIZE && i < BUF_SIZE && buf[i] != '(' && buf[i] != '\0')
 		if (buf[i++] != ' ') cmd[k++] = buf[i-1];
 	cmd[k] = '\0';
 	if (buf[i] != '(') {
-		printf("NOT A COMMAND [expected '(' after '%s']\n", cmd);
+		printf(ERR_PATTERN, "(", cmd);
 		return 1;
 	}
 
 	i++;
-	while (j < 100 && i < 512 && buf[i] != ')' && buf[i] != '\0')
+	while (j < ARG_SIZE && i < BUF_SIZE && buf[i] != ')' && buf[i] != '\0')
 		if (buf[i++] != ' ') arg[j++] = buf[i-1];
 	arg[j] = '\0';
 	if (buf[i] != ')') {
-		printf("NOT A COMMAND [expected ')' after '%s']\n", arg);
+		printf(ERR_PATTERN, ")", cmd);
 		return 1;
 	}
 
-	if (strcmp(cmd, "push") == 0)
-		if (strlen(arg) > 0 && (atoi(arg) != 0 | (strlen(arg) == 1 && arg[0] == '0')))
+	if (strcmp(cmd, "push") == 0) {
+		if (strlen(arg) > 0 && (atoi(arg) != 0 || strcmp(arg, "0") == 0))
 			push(atoi(arg));
+		else printf(ARGEXP_PATTERN, "int");
+	}
 	else if (strcmp(cmd, "pop") == 0) pop();
 	else if (strcmp(cmd, "display") == 0) display();
 	else if (strcmp(cmd, "peek") == 0) printf("PEEK: %d\n", peek());
 	else if (strcmp(cmd, "empty") == 0) printf("%sEMPTY\n", empty() ? "" : "NOT ");
 	else if (strcmp(cmd, "create") == 0) create();
 	else if (strcmp(cmd, "stack_size") == 0) stack_size();
-	else if (strcmp(cmd, "exit") == 0) return 0;
+	else if (strcmp(cmd, "exit") == 0) {
+		printf("PRESS ANY KEY TO PROCEED");
+		exit(0);
+	} else if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0 || strlen(cmd) == 0) 
+		printf(HELP_ANNOTATION);
 	else printf("COMMAND NOT FOUND\n");
 
 	return 1;
 }
 
 int read_input() {
-	return (fgets(buf, 512, stdin) != NULL);
+	return readline(buf, BUF_SIZE, STDIN_FILENO);
 }
 
 int read_pipe() {
-	return readline(buf, 512, fds[0]);
+	return readline(buf, BUF_SIZE, fds[0]);
 }
 
 int main(int argc, char* argv[]) {
 	pipe(fds);
-	int pid = fork();
-	memset(buf, 0, 512);
+	pid = fork();
+	memset(buf, 0, BUF_SIZE);
+	setvbuf(stdout, NULL, _IONBF, BUF_SIZE);
 	if (pid > 0) {
-		//close(fds[0]);
-		while(read_input()) writeline(buf, 512, fds[1]);
+		close(fds[0]);
+		while(read_input()) writeline(buf, BUF_SIZE, fds[1]);
 	} else if (pid == 0) {
-		//close(fds[1]);
-		while(read_pipe()) handle_input();
+		close(fds[1]);
+		printf(HELP_ANNOTATION);
+		printf("<command>: ");
+		while(read_pipe() && handle_input()) printf("<command>: ");
 	} else exit(-1);
 
 	return 0;
